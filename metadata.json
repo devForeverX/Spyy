@@ -1,0 +1,6 @@
+{
+  "name": "Android Remote Control",
+  "description": "Phone-to-phone remote control app with screen sharing, touch gestures, hardware controls, audio streaming, and secure pairing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

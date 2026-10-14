@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Exclude all Keystore-encrypted secrets and identity files from cloud backup -->
+        <exclude domain="sharedpref" path="secure_identity.xml" />
+        <exclude domain="file" path="keystore_secrets/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="secure_identity.xml" />
+        <exclude domain="file" path="keystore_secrets/" />
+    </device-transfer>
+</data-extraction-rules>

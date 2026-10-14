@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Android Remote Control</string>
+    <string name="accessibility_service_label">Remote Control Navigation Service</string>
+    <string name="accessibility_service_description">Ermöglicht dem gekoppelten Admin-Smartphone das Ausführen globaler Navigationstasten (Zurück, Home, Recent Apps).</string>
+    <string name="ime_service_label">Remote Control Tastatur (IME)</string>
+    <string name="channel_session_name">Aktive Fernsteuerung</string>
+    <string name="channel_session_desc">Zeigt den Verbindungsstatus der aktuellen Remote-Control-Sitzung an.</string>
+    <string name="channel_audio_name">Audio-Streaming</string>
+    <string name="channel_audio_desc">Benachrichtigung während aktiver Lautsprecher-Audiowiedergabe.</string>
+</resources>
