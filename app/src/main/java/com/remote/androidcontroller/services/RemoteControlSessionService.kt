@@ -10,21 +10,31 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.remote.androidcontroller.MainActivity
-import com.remote.androidcontroller.R
 import com.remote.androidcontroller.RemoteApp
+import com.remote.androidcontroller.session.SessionStateManager
+import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class RemoteControlSessionService : Service() {
+
+    private val sessionStateManager by lazy {
+        SessionStateManager(File(filesDir, "session_state.json"))
+    }
+
+    private val sessionRegistered = AtomicBoolean(false)
 
     companion object {
         private const val NOTIFICATION_ID = 1001
         const val ACTION_START = "ACTION_START_SESSION"
         const val ACTION_STOP = "ACTION_STOP_SESSION"
         const val EXTRA_PEER_NAME = "EXTRA_PEER_NAME"
+        const val EXTRA_SESSION_ID = "EXTRA_SESSION_ID"
 
-        fun startService(context: Context, peerName: String) {
+        fun startService(context: Context, peerName: String, sessionId: String = "default-session") {
             val intent = Intent(context, RemoteControlSessionService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_PEER_NAME, peerName)
+                putExtra(EXTRA_SESSION_ID, sessionId)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -45,14 +55,45 @@ class RemoteControlSessionService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val peerName = intent.getStringExtra(EXTRA_PEER_NAME) ?: "Gekoppeltes Smartphone"
+                val sessionId = intent.getStringExtra(EXTRA_SESSION_ID) ?: "default-session"
+                registerSession(sessionId, peerName)
                 startForegroundNotification(peerName)
             }
             ACTION_STOP -> {
+                unregisterSession()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
+            else -> {
+                // Ignore stale or null intents; keep service alive if already running.
+            }
         }
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterSession()
+    }
+
+    private fun registerSession(sessionId: String, peerName: String) {
+        if (!sessionRegistered.compareAndSet(false, true)) return
+        val now = System.currentTimeMillis()
+        sessionStateManager.saveSession(
+            SessionStateManager.SessionMeta(
+                sessionId = sessionId,
+                role = "remote_control",
+                startedAt = now,
+                lastHeartbeat = now,
+                state = "ACTIVE"
+            )
+        )
+    }
+
+    private fun unregisterSession() {
+        if (!sessionRegistered.compareAndSet(true, false)) return
+        // If we have no sessionId, just remove stale entries from the persisted state.
+        sessionStateManager.cleanupStaleSessions(0L)
     }
 
     private fun startForegroundNotification(peerName: String) {
