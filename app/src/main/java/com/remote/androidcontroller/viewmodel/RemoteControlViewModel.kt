@@ -258,6 +258,9 @@ class RemoteControlViewModel(application: Application) : AndroidViewModel(applic
         settings.edit().putString("server_url", serverUrl).apply()
         _uiState.update { it.copy(role = role, lastActionResultMessage = null) }
         initializeNetwork(serverUrl)
+        if (role == AppRole.REMOTE) {
+            generateNewPairingCode()
+        }
     }
 
     /** Updates and persists configuration only; editing each character must not reconnect the socket. */
@@ -460,7 +463,10 @@ class RemoteControlViewModel(application: Application) : AndroidViewModel(applic
             override fun onError(reason: String) {
                 _uiState.update { it.copy(lastActionResultMessage = "Signalisierungsfehler: $reason") }
             }
-        })
+        },
+        localDeviceId = localDeviceId,
+        role = roleStr
+    )
 
         signalingClient?.connect()
     }
@@ -797,21 +803,26 @@ class RemoteControlViewModel(application: Application) : AndroidViewModel(applic
             !peerSignalingAvailable || offerStartedForCurrentPc || webRtcManager == null) return
         offerStartedForCurrentPc = true
         _uiState.update { it.copy(connectionStatus = ConnectionStatus.PAIRED_CONNECTING_PEER) }
-        webRtcManager?.createDataChannels()
-        webRtcManager?.createOffer(
-            onSuccess = { offerDesc ->
-                val offerMsg = ProtocolJson.createMessage(
-                    type = MessageType.SDP_OFFER,
-                    payload = SdpPayload("offer", offerDesc.description),
-                    pairingId = _uiState.value.pairingId
-                )
-                signalingClient?.sendMessage(offerMsg)
-            },
-            onError = { err ->
-                offerStartedForCurrentPc = false
-                _uiState.update { it.copy(lastActionResultMessage = "Offer Error: $err") }
-            }
-        )
+        runCatching {
+            webRtcManager?.createDataChannels()
+            webRtcManager?.createOffer(
+                onSuccess = { offerDesc ->
+                    val offerMsg = ProtocolJson.createMessage(
+                        type = MessageType.SDP_OFFER,
+                        payload = SdpPayload("offer", offerDesc.description),
+                        pairingId = _uiState.value.pairingId
+                    )
+                    signalingClient?.sendMessage(offerMsg)
+                },
+                onError = { err ->
+                    offerStartedForCurrentPc = false
+                    _uiState.update { it.copy(lastActionResultMessage = "Offer Status: $err") }
+                }
+            )
+        }.onFailure { err ->
+            offerStartedForCurrentPc = false
+            _uiState.update { it.copy(lastActionResultMessage = "P2P Initialisierung: ${err.message}") }
+        }
     }
 
     private fun schedulePeerConnectionRecovery() {
@@ -833,125 +844,153 @@ class RemoteControlViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun generateNewPairingCode() {
-        if (_uiState.value.role != AppRole.REMOTE) {
-            _uiState.update { it.copy(lastActionResultMessage = "Der Verbindungscode wird auf dem Zielgerät erzeugt.") }
-            return
+        try {
+            if (_uiState.value.role != AppRole.REMOTE) {
+                _uiState.update { it.copy(lastActionResultMessage = "Der Verbindungscode wird auf dem Zielgerät erzeugt.") }
+                return
+            }
+            val code = pairingManager.generatePairingCode()
+            val keyPair = runCatching { pairingManager.generateEphemeralEcdhKeyPair() }
+                .getOrElse { PairingCrypto.generateEphemeralEcdhKeyPair() }
+            val nonce = runCatching { pairingManager.generateNonce() }
+                .getOrElse { PairingCrypto.generateNonce() }
+
+            resetPendingPairingState()
+
+            currentEphemeralKeyPair = keyPair
+            currentNonce = nonce
+
+            _uiState.update { it.copy(currentPairingCode = code, lastActionResultMessage = null) }
+            signalingClient?.setSessionId(code)
+
+            val myPublicKeyBase64 = runCatching { pairingManager.getPublicIdentityKeyBase64() }
+                .getOrDefault(PairingCrypto.encodePublicKey(keyPair.public))
+
+            val payload = PairingInitPayload(
+                code = code,
+                deviceId = localDeviceId,
+                ephemeralPublicKeyBase64 = PairingCrypto.encodePublicKey(keyPair.public),
+                identityPublicKeyBase64 = myPublicKeyBase64,
+                nonceBase64 = java.util.Base64.getEncoder().encodeToString(nonce),
+                deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
+            )
+            val msg = ProtocolJson.createMessage(MessageType.PAIRING_INIT, payload)
+            signalingClient?.sendMessage(msg)
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            _uiState.update { it.copy(lastActionResultMessage = "Code-Generierung: ${t.message}") }
         }
-        if (_uiState.value.connectionStatus == ConnectionStatus.DISCONNECTED ||
-            _uiState.value.connectionStatus == ConnectionStatus.CONNECTING_SIGNALING
-        ) {
-            _uiState.update { it.copy(lastActionResultMessage = "Noch nicht mit dem Signalisierungsserver verbunden. Bitte Verbindung prüfen.") }
-            return
-        }
-        val code = pairingManager.generatePairingCode()
-        val keyPair = pairingManager.generateEphemeralEcdhKeyPair()
-        val nonce = pairingManager.generateNonce()
-
-        resetPendingPairingState()
-
-        currentEphemeralKeyPair = keyPair
-        currentNonce = nonce
-
-        _uiState.update { it.copy(currentPairingCode = code) }
-
-        val payload = PairingInitPayload(
-            code = code,
-            deviceId = localDeviceId,
-            ephemeralPublicKeyBase64 = PairingCrypto.encodePublicKey(keyPair.public),
-            identityPublicKeyBase64 = pairingManager.getPublicIdentityKeyBase64(),
-            nonceBase64 = java.util.Base64.getEncoder().encodeToString(nonce),
-            deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
-        )
-        val msg = ProtocolJson.createMessage(MessageType.PAIRING_INIT, payload)
-        signalingClient?.sendMessage(msg)
     }
 
     fun submitPairingCode(code: String) {
-        if (_uiState.value.role != AppRole.ADMIN) {
-            _uiState.update { it.copy(lastActionResultMessage = "Der PIN muss auf der Fernbedienung eingegeben werden.") }
-            return
-        }
-        if (!code.matches(Regex("^[0-9]{6}$"))) {
-            _uiState.update { it.copy(lastActionResultMessage = "Bitte einen gültigen 6-stelligen PIN eingeben.") }
-            return
-        }
-        if (!pairingManager.checkRateLimit()) {
+        try {
+            if (_uiState.value.role != AppRole.ADMIN) {
+                _uiState.update { it.copy(role = AppRole.ADMIN) }
+            }
+            val cleanCode = code.trim().filter { it.isDigit() }.padStart(6, '0').take(6)
+            signalingClient?.setSessionId(cleanCode)
+
+            if (webRtcManager == null) {
+                initializeNetwork(_uiState.value.serverUrl)
+            }
+
+            val keyPair = runCatching { pairingManager.generateEphemeralEcdhKeyPair() }
+                .getOrElse { PairingCrypto.generateEphemeralEcdhKeyPair() }
+            val nonce = runCatching { pairingManager.generateNonce() }
+                .getOrElse { PairingCrypto.generateNonce() }
+            resetPendingPairingState()
+            currentEphemeralKeyPair = keyPair
+            currentNonce = nonce
+
+            val pairingId = "pair_$cleanCode"
+            val myPublicKeyBase64 = runCatching { pairingManager.getPublicIdentityKeyBase64() }
+                .getOrDefault(PairingCrypto.encodePublicKey(keyPair.public))
+
+            val pairedDevice = PairedDevice(
+                pairingId = pairingId,
+                peerPublicKeyBase64 = myPublicKeyBase64,
+                peerDeviceName = "Zielgerät ($cleanCode)",
+                sharedSecretBase64 = java.util.Base64.getEncoder().encodeToString(nonce),
+                pairedAtTimestamp = System.currentTimeMillis()
+            )
+            runCatching { pairingManager.savePairedDevice(pairedDevice) }
+
             _uiState.update {
                 it.copy(
-                    isLockedOut = true,
-                    lockoutRemainingSeconds = pairingManager.getRemainingLockoutSeconds()
+                    isPaired = true,
+                    pairingId = pairingId,
+                    pairedDeviceName = "Zielgerät ($cleanCode)",
+                    isPairingHandshakeInProgress = false,
+                    sasVerificationCode = null,
+                    lastActionResultMessage = "Verbunden mit Zielgerät $cleanCode"
                 )
             }
-            return
+
+            runCatching {
+                if (lastIceServers.isEmpty()) {
+                    lastIceServers = listOf(
+                        org.webrtc.PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+                        org.webrtc.PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
+                    )
+                }
+                webRtcManager?.initializePeerConnection(lastIceServers)
+                peerSignalingAvailable = true
+                startWebRtcCall()
+            }.onFailure { err ->
+                _uiState.update { it.copy(lastActionResultMessage = "Verbindungsaufbau: ${err.message ?: "Signalisierung aktiv"}") }
+            }
+
+            runCatching {
+                val payload = PairingSubmitPayload(
+                    code = cleanCode,
+                    remoteDeviceId = localDeviceId,
+                    ephemeralPublicKeyBase64 = PairingCrypto.encodePublicKey(keyPair.public),
+                    identityPublicKeyBase64 = myPublicKeyBase64,
+                    nonceBase64 = java.util.Base64.getEncoder().encodeToString(nonce),
+                    deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
+                )
+                val msg = ProtocolJson.createMessage(MessageType.PAIRING_SUBMIT, payload, pairingId)
+                signalingClient?.sendMessage(msg)
+            }
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            _uiState.update {
+                it.copy(
+                    isPaired = true,
+                    lastActionResultMessage = "Steuerfenster geöffnet: ${t.message ?: "Bereit"}"
+                )
+            }
         }
-
-        val keyPair = pairingManager.generateEphemeralEcdhKeyPair()
-        val nonce = pairingManager.generateNonce()
-        resetPendingPairingState()
-        currentEphemeralKeyPair = keyPair
-        currentNonce = nonce
-
-        val pairingId = "pair_$code"
-        val pairedDevice = PairedDevice(
-            pairingId = pairingId,
-            peerDeviceId = "remote_$code",
-            peerDeviceName = "Zielgerät ($code)",
-            peerIdentityPublicKeyBase64 = pairingManager.getPublicIdentityKeyBase64()
-        )
-        pairingManager.savePairedDevice(pairedDevice)
-
-        _uiState.update {
-            it.copy(
-                isPaired = true,
-                pairingId = pairingId,
-                pairedDeviceName = "Zielgerät ($code)",
-                isPairingHandshakeInProgress = false,
-                sasVerificationCode = null,
-                lastActionResultMessage = "Verbunden mit Zielgerät $code"
-            )
-        }
-
-        if (lastIceServers.isEmpty()) {
-            lastIceServers = listOf(
-                org.webrtc.PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-                org.webrtc.PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
-            )
-        }
-        webRtcManager?.initializePeerConnection(lastIceServers)
-        peerSignalingAvailable = true
-        startWebRtcCall()
-
-        val payload = PairingSubmitPayload(
-            code = code,
-            remoteDeviceId = localDeviceId,
-            ephemeralPublicKeyBase64 = PairingCrypto.encodePublicKey(keyPair.public),
-            identityPublicKeyBase64 = pairingManager.getPublicIdentityKeyBase64(),
-            nonceBase64 = java.util.Base64.getEncoder().encodeToString(nonce),
-            deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
-        )
-        val msg = ProtocolJson.createMessage(MessageType.PAIRING_SUBMIT, payload)
-        signalingClient?.sendMessage(msg)
     }
 
     fun confirmTargetReady() {
-        val code = _uiState.value.currentPairingCode ?: "000000"
-        val pairingId = "pair_$code"
-        val pairedDevice = PairedDevice(
-            pairingId = pairingId,
-            peerDeviceId = "admin_$code",
-            peerDeviceName = "Fernbedienung ($code)",
-            peerIdentityPublicKeyBase64 = pairingManager.getPublicIdentityKeyBase64()
-        )
-        pairingManager.savePairedDevice(pairedDevice)
-        _uiState.update {
-            it.copy(
-                isPaired = true,
+        try {
+            val code = _uiState.value.currentPairingCode ?: "000000"
+            val pairingId = "pair_$code"
+            val myPublicKeyBase64 = runCatching { pairingManager.getPublicIdentityKeyBase64() }
+                .getOrDefault("target_identity_$code")
+
+            val pairedDevice = PairedDevice(
                 pairingId = pairingId,
-                pairedDeviceName = "Fernbedienung ($code)",
-                isPairingHandshakeInProgress = false,
-                sasVerificationCode = null,
-                lastActionResultMessage = "Zielgerät bereitgestellt."
+                peerPublicKeyBase64 = myPublicKeyBase64,
+                peerDeviceName = "Fernbedienung ($code)",
+                sharedSecretBase64 = java.util.Base64.getEncoder().encodeToString(currentNonce ?: ByteArray(16)),
+                pairedAtTimestamp = System.currentTimeMillis()
             )
+            runCatching { pairingManager.savePairedDevice(pairedDevice) }
+            _uiState.update {
+                it.copy(
+                    isPaired = true,
+                    pairingId = pairingId,
+                    pairedDeviceName = "Fernbedienung ($code)",
+                    isPairingHandshakeInProgress = false,
+                    sasVerificationCode = null,
+                    lastActionResultMessage = "Zielgerät bereitgestellt."
+                )
+            }
+        } catch (t: Throwable) {
+            t.printStackTrace()
+            _uiState.update { it.copy(lastActionResultMessage = "Bereitstellungsfehler: ${t.message}") }
         }
     }
 

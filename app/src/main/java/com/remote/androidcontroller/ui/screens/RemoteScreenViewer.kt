@@ -93,8 +93,8 @@ fun RemoteScreenViewer(
     }
     DisposableEffect(remoteVideoTrack, frameObserver) {
         val track = remoteVideoTrack
-        if (track != null) track.addSink(frameObserver)
-        onDispose { if (track != null) track.removeSink(frameObserver) }
+        if (track != null) runCatching { track.addSink(frameObserver) }
+        onDispose { if (track != null) runCatching { track.removeSink(frameObserver) } }
     }
 
     val aspectRatio = if (screenWidth > 0 && screenHeight > 0) {
@@ -166,8 +166,8 @@ fun RemoteScreenViewer(
                     onDispose { runCatching { renderer.release() } }
                 }
                 DisposableEffect(renderer, remoteVideoTrack) {
-                    remoteVideoTrack.addSink(renderer)
-                    onDispose { remoteVideoTrack.removeSink(renderer) }
+                    runCatching { remoteVideoTrack.addSink(renderer) }
+                    onDispose { runCatching { remoteVideoTrack.removeSink(renderer) } }
                 }
 
                 Box(
@@ -226,10 +226,12 @@ fun RemoteScreenViewer(
 private fun rememberRenderer(context: Context, eglContext: EglBase.Context): SurfaceViewRenderer {
     return remember(context, eglContext) {
         SurfaceViewRenderer(context).apply {
-            init(eglContext, null)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-            setEnableHardwareScaler(true)
-            setMirror(false)
+            runCatching {
+                init(eglContext, null)
+                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                setEnableHardwareScaler(true)
+                setMirror(false)
+            }
         }
     }
 }

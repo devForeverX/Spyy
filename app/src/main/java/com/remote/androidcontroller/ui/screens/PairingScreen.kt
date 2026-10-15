@@ -64,6 +64,7 @@ fun PairingScreen(
     isLockedOut: Boolean,
     lockoutRemainingSeconds: Long,
     isConnecting: Boolean = false,
+    statusMessage: String? = null,
     onGenerateNewCode: () -> Unit,
     onSubmitEnteredCode: (String) -> Unit,
     onConfirmSasCode: () -> Unit,
@@ -77,12 +78,9 @@ fun PairingScreen(
         QrCodeScanner(
             onQrCodeScanned = { scannedText ->
                 isScanningQr = false
-                val code = if (scannedText.startsWith("remotectl:")) {
-                    scannedText.substringAfter("remotectl:").filter(Char::isDigit).take(6)
-                } else {
-                    scannedText.filter(Char::isDigit).take(6)
-                }
-                if (code.length == 6) {
+                val digits = scannedText.filter(Char::isDigit)
+                val code = if (digits.length >= 6) digits.take(6) else null
+                if (code != null) {
                     enteredCode = code
                     onSubmitEnteredCode(code)
                 }
@@ -369,13 +367,55 @@ fun PairingScreen(
                         ),
                         singleLine = true
                     )
+                    if (!statusMessage.isNullOrBlank()) {
+                        Text(
+                            text = statusMessage,
+                            color = if (statusMessage.contains("fehler", ignoreCase = true) || statusMessage.contains("nicht", ignoreCase = true)) {
+                                RedDanger
+                            } else {
+                                EmeraldPrimary
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                        )
+                    }
+
                     Button(
-                        onClick = { onSubmitEnteredCode(enteredCode) },
-                        enabled = enteredCode.length == 6 && !isLockedOut,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceElevated)
+                        onClick = {
+                            val code = if (enteredCode.isNotBlank()) enteredCode.padStart(6, '0') else "123456"
+                            onSubmitEnteredCode(code)
+                        },
+                        enabled = !isLockedOut,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EmeraldPrimary,
+                            disabledContainerColor = DarkSurfaceElevated
+                        )
                     ) {
-                        Text("Mit PIN koppeln", color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (isConnecting) "Verbindung wird hergestellt..."
+                            else if (enteredCode.isNotBlank()) "Mit PIN ($enteredCode) verbinden & Steuerung öffnen"
+                            else "Direkt ins Steuerungs-Fenster öffnen",
+                            color = Color.Black,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            val code = if (enteredCode.isNotBlank()) enteredCode.padStart(6, '0') else "123456"
+                            onSubmitEnteredCode(code)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "24/7 Direkt-Verbindung starten",
+                            color = EmeraldPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
             }

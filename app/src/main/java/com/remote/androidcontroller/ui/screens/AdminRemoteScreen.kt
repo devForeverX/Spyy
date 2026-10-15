@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -77,6 +79,7 @@ fun AdminRemoteScreen(
     lastActionResultMessage: String?,
     onNavigationAction: (NavigationAction) -> Unit,
     onAdjustVolume: (directionUp: Boolean) -> Unit,
+    onDisconnect: (() -> Unit)? = null,
     // Child tabs content
     keyboardContent: @Composable () -> Unit,
     audioContent: @Composable () -> Unit,
@@ -86,7 +89,7 @@ fun AdminRemoteScreen(
 ) {
     val view = LocalView.current
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabTitles = listOf("Tastatur", "Audio", "Extras", "Rechte", "Bildschirm")
+    val tabTitles = listOf("Bildschirm", "Tastatur", "Audio", "Extras", "Rechte")
 
     Column(
         modifier = modifier
@@ -159,6 +162,21 @@ fun AdminRemoteScreen(
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace
                     )
+
+                    if (onDisconnect != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            onClick = onDisconnect,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PowerSettingsNew,
+                                contentDescription = "Trennen",
+                                tint = EmeraldPrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -208,7 +226,7 @@ fun AdminRemoteScreen(
                         enabled = isConnected,
                         modifier = Modifier.weight(1f),
                         onClick = {
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            runCatching { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP) }
                             onAdjustVolume(true)
                         }
                     )
@@ -220,7 +238,7 @@ fun AdminRemoteScreen(
                         enabled = isConnected,
                         modifier = Modifier.weight(1f),
                         onClick = {
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            runCatching { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP) }
                             onAdjustVolume(false)
                         }
                     )
@@ -253,10 +271,12 @@ fun AdminRemoteScreen(
             containerColor = MaterialTheme.colorScheme.background,
             contentColor = EmeraldPrimary,
             indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
-                    color = EmeraldPrimary
-                )
+                if (selectedTab in tabPositions.indices) {
+                    TabRowDefaults.SecondaryIndicator(
+                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                        color = EmeraldPrimary
+                    )
+                }
             },
             divider = {}
         ) {
@@ -283,11 +303,7 @@ fun AdminRemoteScreen(
                 .fillMaxWidth()
         ) {
             when (selectedTab) {
-                0 -> keyboardContent()
-                1 -> audioContent()
-                2 -> extrasContent()
-                3 -> permissionsContent()
-                4 -> RemoteScreenViewer(
+                0 -> RemoteScreenViewer(
                     isConnected = isConnected,
                     isScreenShareActive = remoteScreenShareActive,
                     remoteVideoTrack = remoteVideoTrack,
@@ -297,6 +313,10 @@ fun AdminRemoteScreen(
                     onRemoteTap = onRemoteTap,
                     onRemoteSwipe = onRemoteSwipe
                 )
+                1 -> keyboardContent()
+                2 -> audioContent()
+                3 -> extrasContent()
+                4 -> permissionsContent()
             }
         }
 

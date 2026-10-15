@@ -55,6 +55,10 @@ fun VirtualKeyboardScreen(
     var isQwertz by remember { mutableStateOf(true) } // Toggle between QWERTZ and QWERTY
     val view = LocalView.current
 
+    fun safeHaptic(constant: Int) {
+        runCatching { view.performHapticFeedback(constant) }
+    }
+
     val row1 = if (isSymbolsMode) listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")
     else listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "ß")
 
@@ -90,7 +94,7 @@ fun VirtualKeyboardScreen(
                     weight = 1f,
                     enabled = enabled,
                     onClick = {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        safeHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                         onTextInput(char, false, false)
                     }
                 )
@@ -109,7 +113,7 @@ fun VirtualKeyboardScreen(
                     weight = 1f,
                     enabled = enabled,
                     onClick = {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        safeHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                         onTextInput(display, false, false)
                     }
                 )
@@ -128,7 +132,7 @@ fun VirtualKeyboardScreen(
                     weight = 1f,
                     enabled = enabled,
                     onClick = {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        safeHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                         onTextInput(display, false, false)
                     }
                 )
@@ -146,7 +150,7 @@ fun VirtualKeyboardScreen(
                 isActive = isShiftActive,
                 enabled = enabled,
                 onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    safeHaptic(HapticFeedbackConstants.VIRTUAL_KEY)
                     isShiftActive = !isShiftActive
                 }
             ) {
@@ -165,7 +169,7 @@ fun VirtualKeyboardScreen(
                     weight = 1f,
                     enabled = enabled,
                     onClick = {
-                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        safeHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                         onTextInput(display, false, false)
                     }
                 )
@@ -176,7 +180,7 @@ fun VirtualKeyboardScreen(
                 weight = 1.4f,
                 enabled = enabled,
                 onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    safeHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                     onTextInput("", false, true)
                 }
             ) {
@@ -200,7 +204,7 @@ fun VirtualKeyboardScreen(
                 weight = 1.5f,
                 enabled = enabled,
                 onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    safeHaptic(HapticFeedbackConstants.VIRTUAL_KEY)
                     isSymbolsMode = !isSymbolsMode
                 }
             )
@@ -211,7 +215,7 @@ fun VirtualKeyboardScreen(
                 weight = 1.0f,
                 enabled = enabled,
                 onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    safeHaptic(HapticFeedbackConstants.VIRTUAL_KEY)
                     isQwertz = !isQwertz
                 }
             )
@@ -222,7 +226,7 @@ fun VirtualKeyboardScreen(
                 weight = 4.5f,
                 enabled = enabled,
                 onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    safeHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                     onTextInput(" ", false, false)
                 }
             )
@@ -233,7 +237,7 @@ fun VirtualKeyboardScreen(
                 weight = 1f,
                 enabled = enabled,
                 onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    safeHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                     onTextInput(".", false, false)
                 }
             )
@@ -244,7 +248,7 @@ fun VirtualKeyboardScreen(
                 backgroundColor = EmeraldPrimary,
                 enabled = enabled,
                 onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    safeHaptic(HapticFeedbackConstants.KEYBOARD_TAP)
                     onTextInput("", true, false)
                 }
             ) {

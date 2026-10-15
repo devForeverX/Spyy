@@ -52,7 +52,7 @@ class RemoteControlSessionService : Service() {
                 stopSelf()
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun startForegroundNotification(peerName: String) {
@@ -65,8 +65,8 @@ class RemoteControlSessionService : Service() {
         )
 
         val notification: Notification = NotificationCompat.Builder(this, RemoteApp.CHANNEL_SESSION_ID)
-            .setContentTitle("Aktive Fernsteuerungssitzung")
-            .setContentText("Verbunden mit $peerName")
+            .setContentTitle("Android Remote Control (24/7 aktiv)")
+            .setContentText("Zielgerät ist bereit für Fernsteuerung ($peerName)")
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

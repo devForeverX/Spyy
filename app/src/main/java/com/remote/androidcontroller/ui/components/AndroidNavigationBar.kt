@@ -58,7 +58,7 @@ fun AndroidNavigationBar(
         NavButton(
             enabled = enabled,
             onClick = {
-                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                runCatching { view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) }
                 onAction(NavigationAction.BACK)
             }
         ) {
@@ -74,7 +74,7 @@ fun AndroidNavigationBar(
         NavButton(
             enabled = enabled,
             onClick = {
-                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                runCatching { view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) }
                 onAction(NavigationAction.HOME)
             }
         ) {
@@ -93,7 +93,7 @@ fun AndroidNavigationBar(
         NavButton(
             enabled = enabled,
             onClick = {
-                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                runCatching { view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY) }
                 onAction(NavigationAction.RECENTS)
             }
         ) {

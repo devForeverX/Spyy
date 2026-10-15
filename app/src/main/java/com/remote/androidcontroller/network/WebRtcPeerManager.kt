@@ -147,20 +147,28 @@ class WebRtcPeerManager(
     fun createDataChannels() {
         val pc = peerConnection ?: return
 
-        // 1. Reliable Control Channel
-        val controlInit = DataChannel.Init().apply {
-            ordered = true
-        }
-        controlDataChannel = pc.createDataChannel("control", controlInit).also {
-            setupControlChannelObserver(it)
-        }
+        try {
+            // 1. Reliable Control Channel
+            val controlInit = DataChannel.Init().apply {
+                ordered = true
+            }
+            val ctrl = pc.createDataChannel("control", controlInit)
+            if (ctrl != null) {
+                controlDataChannel = ctrl
+                setupControlChannelObserver(ctrl)
+            }
 
-        // 2. High-Throughput Binary Audio Channel
-        val audioInit = DataChannel.Init().apply {
-            ordered = true
-        }
-        audioDataChannel = pc.createDataChannel("audio-binary", audioInit).also {
-            setupAudioChannelObserver(it)
+            // 2. High-Throughput Binary Audio Channel
+            val audioInit = DataChannel.Init().apply {
+                ordered = true
+            }
+            val audio = pc.createDataChannel("audio-binary", audioInit)
+            if (audio != null) {
+                audioDataChannel = audio
+                setupAudioChannelObserver(audio)
+            }
+        } catch (t: Throwable) {
+            listener.onError("DataChannel Initialisierung: ${t.message}")
         }
     }
 
@@ -416,18 +424,23 @@ class WebRtcPeerManager(
     }
 
     private fun prepareLocalScreenTrack(pc: PeerConnection) {
-        if (screenVideoSource == null) {
-            screenVideoSource = peerConnectionFactory.createVideoSource(true)
-            surfaceTextureHelper = SurfaceTextureHelper.create("RemoteScreenCapture", eglBase.eglBaseContext)
+        try {
+            if (screenVideoSource == null) {
+                screenVideoSource = peerConnectionFactory.createVideoSource(true)
+                surfaceTextureHelper = SurfaceTextureHelper.create("RemoteScreenCapture", eglBase.eglBaseContext)
+            }
+            val source = screenVideoSource ?: return
+            val track = localScreenTrack ?: peerConnectionFactory.createVideoTrack("remote-screen-track", source).also {
+                localScreenTrack = it
+                it.setEnabled(false)
+            }
+            val sender = pc.addTrack(track, listOf("remote-screen-stream"))
+            if (sender != null) {
+                track.setEnabled(screenCaptureActive)
+            }
+        } catch (t: Throwable) {
+            listener.onError("ScreenTrack Vorbereitung: ${t.message}")
         }
-        val source = screenVideoSource ?: throw IllegalStateException("VideoSource fehlt")
-        val track = localScreenTrack ?: peerConnectionFactory.createVideoTrack("remote-screen-track", source).also {
-            localScreenTrack = it
-            it.setEnabled(false)
-        }
-        val sender = pc.addTrack(track, listOf("remote-screen-stream"))
-        if (sender == null) throw IllegalStateException("WebRTC hat den Bildschirm-Track abgelehnt")
-        track.setEnabled(screenCaptureActive)
     }
 
     @Synchronized

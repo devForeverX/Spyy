@@ -76,6 +76,7 @@ class MainActivity : ComponentActivity() {
                                 isConnecting = uiState.isPairingHandshakeInProgress ||
                                     uiState.connectionStatus == ConnectionStatus.CONNECTING_SIGNALING ||
                                     uiState.connectionStatus == ConnectionStatus.PAIRED_CONNECTING_PEER,
+                                statusMessage = uiState.lastActionResultMessage,
                                 onGenerateNewCode = { viewModel.generateNewPairingCode() },
                                 onSubmitEnteredCode = { viewModel.submitPairingCode(it) },
                                 onConfirmSasCode = {
@@ -109,6 +110,7 @@ class MainActivity : ComponentActivity() {
                                 lastActionResultMessage = uiState.lastActionResultMessage,
                                 onNavigationAction = { viewModel.sendNavigationAction(it) },
                                 onAdjustVolume = { viewModel.adjustVolume(it) },
+                                onDisconnect = { viewModel.revokePairing() },
                                 keyboardContent = {
                                     VirtualKeyboardScreen(
                                         enabled = isConnected,

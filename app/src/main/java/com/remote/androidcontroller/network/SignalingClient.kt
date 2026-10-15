@@ -125,8 +125,25 @@ class SignalingClient(
         })
     }
 
+    fun setSessionId(sessionId: String) {
+        mongoClient?.setSessionId(sessionId)
+    }
+
     fun sendMessage(message: BaseMessage): Boolean {
         if (isMongoMode) {
+            if (!message.pairingId.isNullOrBlank()) {
+                mongoClient?.setSessionId(message.pairingId)
+            }
+            if (message.type == MessageType.PAIRING_INIT) {
+                runCatching {
+                    ProtocolJson.decodePayload<PairingInitPayload>(message.payload).code
+                }.getOrNull()?.let { mongoClient?.setSessionId(it) }
+            } else if (message.type == MessageType.PAIRING_SUBMIT) {
+                runCatching {
+                    ProtocolJson.decodePayload<PairingSubmitPayload>(message.payload).code
+                }.getOrNull()?.let { mongoClient?.setSessionId(it) }
+            }
+
             // Handle registration and worldwide STUN routing in serverless MongoDB mode
             if (message.type == MessageType.REGISTER) {
                 scope.launch {
@@ -157,7 +174,7 @@ class SignalingClient(
                 }
             }
 
-            // Post message via MongoDB
+            // Post message via cloud signaling
             return mongoClient?.sendMessage(message) ?: true
         }
 

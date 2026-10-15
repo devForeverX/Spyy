@@ -56,6 +56,8 @@ import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import com.remote.androidcontroller.ui.theme.DarkBorder
 import com.remote.androidcontroller.ui.theme.DarkSurface
@@ -108,108 +110,160 @@ fun QrCodeScanner(
                 }
             }
 
-            AndroidView(
-                factory = { ctx ->
-                    val previewView = PreviewView(ctx)
-                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+            var cameraAvailable by remember { mutableStateOf(true) }
 
-                    cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
-                        val preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
+            if (cameraAvailable) {
+                AndroidView(
+                    factory = { ctx ->
+                        val previewView = PreviewView(ctx)
+                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
 
-                        val imageAnalysis = ImageAnalysis.Builder()
-                            .setTargetResolution(Size(1280, 720))
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .build()
-
-                        val reader = MultiFormatReader().apply {
-                            setHints(
-                                mapOf(
-                                    DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-                                    DecodeHintType.TRY_HARDER to true,
-                                    DecodeHintType.CHARACTER_SET to "UTF-8"
-                                )
-                            )
-                        }
-
-                        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                            if (isScanned.get()) {
-                                imageProxy.close()
-                                return@setAnalyzer
-                            }
-
-                            val plane = imageProxy.planes[0]
-                            val buffer: ByteBuffer = plane.buffer
-                            val rowStride = plane.rowStride
-                            val data = ByteArray(buffer.remaining())
-                            buffer.get(data)
-
-                            val width = imageProxy.width
-                            val height = imageProxy.height
-
-                            val source = PlanarYUVLuminanceSource(
-                                data, rowStride, height, 0, 0, width, height, false
-                            )
-                            val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
-
+                        cameraProviderFuture.addListener({
                             try {
-                                val result = reader.decodeWithState(binaryBitmap)
-                                if (result != null && isScanned.compareAndSet(false, true)) {
-                                    previewView.post {
-                                        onQrCodeScanned(result.text)
-                                    }
+                                val cameraProvider = cameraProviderFuture.get()
+                                val preview = Preview.Builder().build().also {
+                                    it.setSurfaceProvider(previewView.surfaceProvider)
                                 }
-                            } catch (_: Exception) {
-                                // Try rotated source if camera frame is rotated by 90 degrees
-                                try {
-                                    val rotation = imageProxy.imageInfo.rotationDegrees
-                                    if (rotation == 90 || rotation == 270) {
-                                        val rotatedData = ByteArray(width * height)
-                                        for (y in 0 until height) {
-                                            for (x in 0 until width) {
-                                                rotatedData[x * height + (height - y - 1)] = data[y * rowStride + x]
-                                            }
-                                        }
-                                        val rotSource = PlanarYUVLuminanceSource(
-                                            rotatedData, height, width, 0, 0, height, width, false
+
+                                val imageAnalysis = ImageAnalysis.Builder()
+                                    .setTargetResolution(Size(1280, 720))
+                                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                    .build()
+
+                                val reader = MultiFormatReader().apply {
+                                    setHints(
+                                        mapOf(
+                                            DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
+                                            DecodeHintType.TRY_HARDER to true,
+                                            DecodeHintType.CHARACTER_SET to "UTF-8"
                                         )
-                                        val rotBitmap = BinaryBitmap(HybridBinarizer(rotSource))
-                                        val rotResult = reader.decodeWithState(rotBitmap)
-                                        if (rotResult != null && isScanned.compareAndSet(false, true)) {
+                                    )
+                                }
+
+                                imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                                    if (isScanned.get()) {
+                                        imageProxy.close()
+                                        return@setAnalyzer
+                                    }
+
+                                    try {
+                                        var decodedText: String? = null
+
+                                        // First attempt: native CameraX toBitmap() with rotation applied
+                                        try {
+                                            val bitmap = imageProxy.toBitmap()
+                                            val bWidth = bitmap.width
+                                            val bHeight = bitmap.height
+                                            val pixels = IntArray(bWidth * bHeight)
+                                            bitmap.getPixels(pixels, 0, bWidth, 0, 0, bWidth, bHeight)
+                                            val rgbSource = RGBLuminanceSource(bWidth, bHeight, pixels)
+                                            try {
+                                                val binaryBitmap = BinaryBitmap(HybridBinarizer(rgbSource))
+                                                decodedText = reader.decodeWithState(binaryBitmap)?.text
+                                            } catch (_: Exception) {
+                                                try {
+                                                    val globalBitmap = BinaryBitmap(GlobalHistogramBinarizer(rgbSource))
+                                                    decodedText = reader.decodeWithState(globalBitmap)?.text
+                                                } catch (_: Exception) {}
+                                            }
+                                        } catch (_: Exception) {}
+
+                                        // Second attempt: fallback to YUV plane
+                                        if (decodedText == null) {
+                                            try {
+                                                val plane = imageProxy.planes[0]
+                                                val buffer: ByteBuffer = plane.buffer
+                                                val rowStride = plane.rowStride
+                                                val data = ByteArray(buffer.remaining())
+                                                buffer.get(data)
+                                                val width = imageProxy.width
+                                                val height = imageProxy.height
+                                                val source = PlanarYUVLuminanceSource(
+                                                    data, rowStride, height, 0, 0, width, height, false
+                                                )
+                                                val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
+                                                decodedText = reader.decodeWithState(binaryBitmap)?.text
+                                            } catch (_: Exception) {}
+                                        }
+
+                                        if (!decodedText.isNullOrBlank() && isScanned.compareAndSet(false, true)) {
                                             previewView.post {
-                                                onQrCodeScanned(rotResult.text)
+                                                onQrCodeScanned(decodedText)
                                             }
                                         }
+                                    } catch (_: Exception) {
+                                        // Frame does not contain valid barcode
+                                    } finally {
+                                        reader.reset()
+                                        imageProxy.close()
                                     }
-                                } catch (_: Exception) {
-                                    // Frame does not contain valid barcode
                                 }
-                            } finally {
-                                reader.reset()
-                                imageProxy.close()
+
+                                val cameraSelector = when {
+                                    cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
+                                    cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
+                                    else -> null
+                                }
+
+                                if (cameraSelector != null) {
+                                    cameraProvider.unbindAll()
+                                    cameraProvider.bindToLifecycle(
+                                        lifecycleOwner,
+                                        cameraSelector,
+                                        preview,
+                                        imageAnalysis
+                                    )
+                                } else {
+                                    cameraAvailable = false
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                cameraAvailable = false
                             }
-                        }
+                        }, ContextCompat.getMainExecutor(ctx))
 
-                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-                        try {
-                            cameraProvider.unbindAll()
-                            cameraProvider.bindToLifecycle(
-                                lifecycleOwner,
-                                cameraSelector,
-                                preview,
-                                imageAnalysis
-                            )
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }, ContextCompat.getMainExecutor(ctx))
-
-                    previewView
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                        previewView
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                // Fallback UI when device or emulator has no physical camera
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "Keine Kamera verfügbar",
+                        color = TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Im Browser-Emulator oder auf Geräten ohne Kamera kann der QR-Code nicht optisch gescannt werden. Nutze stattdessen die Sofort-Verbindung per PIN.",
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Button(
+                        onClick = { onQrCodeScanned("123456") },
+                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldPrimary)
+                    ) {
+                        Text("Mit Standard-PIN (123456) verbinden", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurface)
+                    ) {
+                        Text("Abbrechen & PIN manuell tippen", color = TextPrimary)
+                    }
+                }
+            }
 
             // Scanning Overlay UI
             Column(
