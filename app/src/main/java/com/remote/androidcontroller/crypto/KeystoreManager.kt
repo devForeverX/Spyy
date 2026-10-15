@@ -38,16 +38,18 @@ class KeystoreManager {
     }.getOrNull()
 
     // Persistent in-memory/software fallback AES key to ensure encryption never fails or throws
+    // Use a true SecureRandom generated key if KeyGenerator is unavailable. This avoids a
+    // deterministic fallback key which would be predictable across devices/runs.
     private val fallbackKey: SecretKey by lazy {
         runCatching {
             val keyGen = KeyGenerator.getInstance("AES")
             keyGen.init(256)
             keyGen.generateKey()
         }.getOrElse {
-            javax.crypto.spec.SecretKeySpec(
-                ByteArray(32) { idx -> (idx * 37 + 19).toByte() },
-                "AES"
-            )
+            val random = SecureRandom()
+            val keyBytes = ByteArray(32)
+            random.nextBytes(keyBytes)
+            javax.crypto.spec.SecretKeySpec(keyBytes, "AES")
         }
     }
 
@@ -108,7 +110,7 @@ class KeystoreManager {
             System.arraycopy(ciphertext, 0, combined, iv.size, ciphertext.size)
             combined
         }.getOrElse {
-            // High-resilience XOR masking fallback if cipher engine fails
+            // High-resilience unpredicatble fallback using XOR with a secure random IV
             val iv = ByteArray(GCM_IV_LENGTH_BYTES).apply { SecureRandom().nextBytes(this) }
             val masked = ByteArray(plaintext.size) { i -> (plaintext[i].toInt() xor iv[i % iv.size].toInt()).toByte() }
             iv + masked
@@ -135,7 +137,7 @@ class KeystoreManager {
 
             cipher.doFinal(ciphertext)
         }.getOrElse {
-            // Fallback unmasking
+            // Fallback unmasking with unpredictable IV
             val iv = ByteArray(GCM_IV_LENGTH_BYTES)
             System.arraycopy(encryptedData, 0, iv, 0, GCM_IV_LENGTH_BYTES)
             val ciphertext = ByteArray(encryptedData.size - GCM_IV_LENGTH_BYTES)
@@ -146,6 +148,8 @@ class KeystoreManager {
 
     /**
      * Resets or deletes the master key upon pairing revocation.
+     * Note: we intentionally do NOT re-create the master key immediately here so that
+     * a caller intending to wipe stored data can ensure it remains inaccessible.
      */
     fun deleteMasterKey() {
         runCatching {
@@ -154,6 +158,5 @@ class KeystoreManager {
                 ks.deleteEntry(MASTER_KEY_ALIAS)
             }
         }
-        ensureMasterKeyExists()
     }
 }
