@@ -1,6 +1,9 @@
 package com.remote.androidcontroller.crypto
 
 import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.AtomicFile
 import java.io.File
 import java.nio.ByteBuffer
 import java.security.KeyFactory
@@ -13,6 +16,7 @@ import java.security.PublicKey
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
+import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import javax.crypto.KeyAgreement
@@ -167,17 +171,19 @@ class PairingManager(private val context: Context) {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val IDENTITY_KEY_ALIAS = "com.remote.identity_ec_key"
         private const val SECURE_PEER_FILE = "paired_peer_secure.bin"
+        private const val FALLBACK_KEYPAIR_FILE = "fallback_ec_keypair.bin"
+        private const val LOCKOUT_PREFS = "com.remote.pairing_lockout_prefs"
         private const val MAX_PAIRING_ATTEMPTS = 5
         private const val LOCKOUT_DURATION_MS = 15 * 60 * 1000L // 15 Minutes
-
-        private var failedAttempts = 0
-        private var lockoutUntilTimestamp = 0L
     }
 
     private val keystoreManager = KeystoreManager.getInstance()
     private val prefs = context.getSharedPreferences("com.remote.identity_prefs", Context.MODE_PRIVATE)
+    private val lockoutPrefs = context.getSharedPreferences(LOCKOUT_PREFS, Context.MODE_PRIVATE)
+    private val fallbackKeyPairFile = File(context.filesDir, FALLBACK_KEYPAIR_FILE)
 
-    // Software fallback EC keypair if AndroidKeyStore hardware engine is missing or fails
+    // Software fallback EC keypair if AndroidKeyStore hardware engine is missing or fails.
+    // Persisted in an app-private file instead of SharedPreferences to avoid leaving raw private-key material in a plaintext preference store.
     private val fallbackKeyPair: KeyPair by lazy {
         loadOrGenerateFallbackKeyPair()
     }
@@ -186,24 +192,47 @@ class PairingManager(private val context: Context) {
         ensureIdentityKeyPairExists()
     }
 
-    private fun loadOrGenerateFallbackKeyPair(): KeyPair {
-        val pubBase64 = prefs.getString("fallback_pub_key", null)
-        val privBase64 = prefs.getString("fallback_priv_key", null)
-        if (!pubBase64.isNullOrEmpty() && !privBase64.isNullOrEmpty()) {
-            val loaded = runCatching {
-                val kf = java.security.KeyFactory.getInstance("EC")
-                val pubSpec = java.security.spec.X509EncodedKeySpec(java.util.Base64.getDecoder().decode(pubBase64))
-                val privSpec = java.security.spec.PKCS8EncodedKeySpec(java.util.Base64.getDecoder().decode(privBase64))
-                KeyPair(kf.generatePublic(pubSpec), kf.generatePrivate(privSpec))
-            }.getOrNull()
-            if (loaded != null) return loaded
+    private fun readFallbackKeyPair(): KeyPair? {
+        if (!fallbackKeyPairFile.exists()) return null
+        return runCatching {
+            val lines = fallbackKeyPairFile.readLines()
+            if (lines.size < 2) return null
+            val keyFactory = KeyFactory.getInstance("EC")
+            val publicKey = keyFactory.generatePublic(
+                X509EncodedKeySpec(Base64.getDecoder().decode(lines[0].trim()))
+            )
+            val privateKey = keyFactory.generatePrivate(
+                PKCS8EncodedKeySpec(Base64.getDecoder().decode(lines[1].trim()))
+            )
+            KeyPair(publicKey, privateKey)
+        }.getOrNull()
+    }
+
+    private fun writeFallbackKeyPair(keyPair: KeyPair) {
+        val atomicFile = AtomicFile(fallbackKeyPairFile)
+        val content = buildString {
+            append(Base64.getEncoder().encodeToString(keyPair.public.encoded))
+            append('\n')
+            append(Base64.getEncoder().encodeToString(keyPair.private.encoded))
+            append('\n')
         }
+        val outputStream = atomicFile.startWrite()
+        try {
+            outputStream.write(content.toByteArray(Charsets.UTF_8))
+            atomicFile.finishWrite(outputStream)
+        } catch (t: Throwable) {
+            atomicFile.failWrite(outputStream)
+            throw t
+        }
+    }
+
+    private fun loadOrGenerateFallbackKeyPair(): KeyPair {
+        val existing = readFallbackKeyPair()
+        if (existing != null) return existing
+
         val generated = PairingCrypto.generateEphemeralEcdhKeyPair()
         runCatching {
-            prefs.edit()
-                .putString("fallback_pub_key", java.util.Base64.getEncoder().encodeToString(generated.public.encoded))
-                .putString("fallback_priv_key", java.util.Base64.getEncoder().encodeToString(generated.private.encoded))
-                .apply()
+            writeFallbackKeyPair(generated)
         }
         return generated
     }
@@ -213,13 +242,12 @@ class PairingManager(private val context: Context) {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
             if (!keyStore.containsAlias(IDENTITY_KEY_ALIAS)) {
                 val kpg = KeyPairGenerator.getInstance("EC", ANDROID_KEYSTORE)
-                val parameterSpec = android.security.keystore.KeyGenParameterSpec.Builder(
+                val parameterSpec = KeyGenParameterSpec.Builder(
                     IDENTITY_KEY_ALIAS,
-                    android.security.keystore.KeyProperties.PURPOSE_SIGN or
-                            android.security.keystore.KeyProperties.PURPOSE_VERIFY
+                    KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
                 )
                     .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-                    .setDigests(android.security.keystore.KeyProperties.DIGEST_SHA256)
+                    .setDigests(KeyProperties.DIGEST_SHA256)
                     .build()
 
                 kpg.initialize(parameterSpec)
@@ -269,27 +297,34 @@ class PairingManager(private val context: Context) {
     fun decodePublicKey(base64: String): PublicKey = PairingCrypto.decodePublicKey(base64)
 
     fun checkRateLimit(): Boolean {
-        if (System.currentTimeMillis() < lockoutUntilTimestamp) {
-            return false
-        }
-        return true
+        val lockoutUntil = lockoutPrefs.getLong("lockout_until", 0L)
+        return System.currentTimeMillis() >= lockoutUntil
     }
 
     fun recordFailedAttempt() {
-        failedAttempts++
-        if (failedAttempts >= MAX_PAIRING_ATTEMPTS) {
-            lockoutUntilTimestamp = System.currentTimeMillis() + LOCKOUT_DURATION_MS
-            failedAttempts = 0
+        val currentAttempts = lockoutPrefs.getInt("failed_attempts", 0) + 1
+        if (currentAttempts >= MAX_PAIRING_ATTEMPTS) {
+            val nextLockoutUntil = System.currentTimeMillis() + LOCKOUT_DURATION_MS
+            lockoutPrefs.edit()
+                .putInt("failed_attempts", 0)
+                .putLong("lockout_until", nextLockoutUntil)
+                .apply()
+        } else {
+            lockoutPrefs.edit()
+                .putInt("failed_attempts", currentAttempts)
+                .apply()
         }
     }
 
     fun recordSuccess() {
-        failedAttempts = 0
-        lockoutUntilTimestamp = 0L
+        lockoutPrefs.edit()
+            .remove("failed_attempts")
+            .remove("lockout_until")
+            .apply()
     }
 
     fun getRemainingLockoutSeconds(): Long {
-        val diff = lockoutUntilTimestamp - System.currentTimeMillis()
+        val diff = lockoutPrefs.getLong("lockout_until", 0L) - System.currentTimeMillis()
         return if (diff > 0) diff / 1000 else 0
     }
 
@@ -298,7 +333,15 @@ class PairingManager(private val context: Context) {
             val raw = "${device.pairingId}\n${device.peerPublicKeyBase64}\n${device.peerDeviceName}\n${device.sharedSecretBase64}\n${device.pairedAtTimestamp}"
             val encrypted = keystoreManager.encrypt(raw.toByteArray(Charsets.UTF_8))
             val file = File(context.filesDir, SECURE_PEER_FILE)
-            file.writeBytes(encrypted)
+            val atomicFile = AtomicFile(file)
+            val outputStream = atomicFile.startWrite()
+            try {
+                outputStream.write(encrypted)
+                atomicFile.finishWrite(outputStream)
+            } catch (t: Throwable) {
+                atomicFile.failWrite(outputStream)
+                throw t
+            }
         }
     }
 
